@@ -1,15 +1,25 @@
-import carball
-import numpy
-from carball.json_parser.game import Game
-from carball.analysis.analysis_manager import AnalysisManager
 import glob
-import numpy as np
-import keras
-from keras import Sequential
-from keras.layers import Dense
 import sys
 
+import carball
+import numpy
+import numpy as np
+import pandas
+from carball.analysis.analysis_manager import AnalysisManager
+from carball.json_parser.game import Game
+from keras import Sequential
+from keras.layers import Dense
+
 numpy.set_printoptions(threshold=sys.maxsize)
+
+boost_mapping = {
+    40.0: 0,
+    50.0: 1,
+    160.0: 2,
+    190.0: 3,
+    300.0: 4,
+    310.0: 5
+}
 
 predict_dist = 5
 
@@ -33,87 +43,82 @@ def normalize(dataframe):
     return dataframe
 
 
-def getTraindata(dataframe):
-    dataframe = dataframe.drop(['ping',
-                                'ball_cam',
-                                'ang_vel_x', 'ang_vel_y', 'ang_vel_z',
-                                'throttle',
-                                'steer',
-                                'rot_x', 'rot_y', 'rot_z',
-                                'handbrake',
-                                'jump_active',
-                                'double_jump_active',
-                                'boost_active',
-                                'dodge_active',
-                                'hit_team_no',
-                                'boost_collect',
-                                'game',
-                                'delta',
-                                'game_time',
-                                'seconds_remaining',
-                                'replicated_seconds_remaining',
-                                'ball_has_been_hit',
-                                'goal_number',
-                                'time',
-                                'is_overtime'], level=1, axis=1)
-    dataframe = normalize(dataframe)
-    # print(dataframe.head().to_string())
-    # print(dataframe.shape)
-    return dataframe
+def prepareData(df, boostPads):
+    df = df.loc[:, (slice(None), [
+        "pos_x", "pos_y", "pos_z",
+        "vel_x", "vel_y", "vel_z",
+        "boost"
+    ])]
+
+    df_ball = df['ball']
+
+    df_players = df.drop(columns='ball', level=0)
+    stationary_mask = (df_players.shift() == df_players).groupby(level=0, axis=1).all()
+
+    rows_to_drop = stationary_mask.any(axis=1)
+
+    df_filtered_ball = df_ball[~rows_to_drop]
+    df_filtered_ball.columns = pandas.MultiIndex.from_product([['ball'], df_filtered_ball.columns])
+
+    df_filtered = pandas.concat(
+        [df_players[~rows_to_drop], df_filtered_ball],
+        axis=1
+    )
+
+    return normalize(df_filtered), boostPads[~rows_to_drop]
+
+
+def getMappedBoostId(pad_id):
+    try:
+        return boost_mapping.get(pad_id, -1)
+    except KeyError:
+        raise ValueError(f"Invalid replay pad_id: {pad_id}")
 
 
 X_data = []
 y_data = []
 first = True
 number = 0
+
 for filepath in glob.iglob('train_replays/*.replay'):
-    number += 1
-    if number > 10:
-        break
+    print(f"Decompiling replay {number + 1}: {filepath}")
     _json = carball.decompile_replay(filepath)
+    print("Replay decompiled successfully")
+
     game = Game()
+    print("Initializing game...")
     game.initialize(loaded_json=_json)
+    print("Game initialized successfully")
 
     analysis_manager = AnalysisManager(game)
+    print("Creating analysis...")
     analysis_manager.create_analysis()
-
-    print(filepath)
-    print(number)
+    print("Analysis created successfully")
 
     dataframe = analysis_manager.get_data_frame()
 
-    boost_data = dataframe.loc[:, (slice(None), 'boost_collect')]
-    boost_pads = np.zeros((len(dataframe), 6))
-    for i in range(len(dataframe)):
-        game_time = dataframe.iloc[i]['game', 'time']
-        if all(np.isnan(x) for x in boost_data.iloc[i]):
-            continue
+    boost_collect = dataframe.loc[:, (slice(None), 'boost_collect')]
 
-        for y in boost_data.iloc[i]:
-            if np.isnan(y):
+    print("Converting boost pickups...")
+    boostPads = np.ones((len(dataframe), 6))
+    for rowNr in range(len(dataframe)):
+        for padId in boost_collect.iloc[rowNr]:
+            if np.isnan(padId):
                 continue
-            switch_boost_num = -1
-            if y == 40.0:
-                switch_boost_num = 0
-            if y == 50.0:
-                switch_boost_num = 1
-            if y == 160.0:
-                switch_boost_num = 2
-            if y == 190.0:
-                switch_boost_num = 3
-            if y == 300.0:
-                switch_boost_num = 4
-            if y == 310.0:
-                switch_boost_num = 5
-            j = i
-            while j < len(dataframe) and game_time + 10.0 >= dataframe.iloc[j]['game', 'time']:
-                boost_pads[j, switch_boost_num] = 1
-                j += 1
+            pickedBigPadId = getMappedBoostId(padId)
+            for i in range(30 * 10):  # frame_tick is 0,03333 seconds -> 30 ticks/second
+                if i + rowNr >= len(dataframe):
+                    break
+                boostPads[i + rowNr, pickedBigPadId] = 0
 
-    orig_data = getTraindata(dataframe)
+    orig_data, boostPads = prepareData(dataframe, boostPads)
 
+    ball = np.nan_to_num(orig_data['ball'], nan=0.0)
     blue_team = orig_data.copy()
     orange_team = orig_data.copy()
+
+    blue_team = blue_team.drop('ball', level=0, axis=1)
+    orange_team = orange_team.drop('ball', level=0, axis=1)
 
     for player in game.players:
         if player.is_orange:
@@ -121,33 +126,39 @@ for filepath in glob.iglob('train_replays/*.replay'):
         else:
             orange_team = orange_team.drop([player.name], level=0, axis=1)
 
-    blue_team = np.nan_to_num(blue_team.drop('ball', level=0, axis=1), nan=0.0)
-    orange_team = np.nan_to_num(orange_team.drop('ball', level=0, axis=1), nan=0.0)
-    ball = np.nan_to_num(orig_data['ball'], nan=0.0)
+    blue_team = np.nan_to_num(blue_team, nan=0.0)
+    orange_team = np.nan_to_num(orange_team, nan=0.0)
 
-    for i in range(len(blue_team) - 1):
-        while i < len(blue_team) - 1 and (
-                blue_team[i][0] == blue_team[i + 1][0] or blue_team[i][7] == blue_team[i + 1][7] or blue_team[i][14] ==
-                blue_team[i + 1][14] or
-                orange_team[i][0] == orange_team[i + 1][0] or orange_team[i][7] == orange_team[i + 1][7] or orange_team[i][
-                    14] == orange_team[i + 1][14] or ball[i][0] == ball[i + 1][0]):
+    for goalNr in range(len(game.goals)):
+        start = 0 if goalNr == 0 else game.goals[goalNr - 1].frame_number
+        end = game.goals[goalNr].frame_number
 
-            if any(boost_pads[i, j] != boost_pads[i + 1, j] for j in range(len(boost_pads[i]))):
-                i += 1
-                continue
-
-            boost_pads = np.delete(boost_pads, i + 1, 0)
-            blue_team = np.delete(blue_team, i + 1, 0)
-            orange_team = np.delete(orange_team, i + 1, 0)
-            ball = np.delete(ball, i + 1, 0)
-
-    for i in range(len(game.goals)):
-        start = 0
-        if i > 0:
-            start = game.goals[i-1].frame_number
         for player_num in range(3):
-            data = np.concatenate((np.concatenate((np.concatenate((blue_team[start:game.goals[i].frame_number, (player_num*7):(player_num*7 + 7)], np.concatenate((blue_team[start:game.goals[i].frame_number, :(player_num*7)], blue_team[start:game.goals[i].frame_number, (player_num*7 + 7):]), axis=1)), axis=1), orange_team[start:game.goals[i].frame_number]), axis=1), ball[start:game.goals[i].frame_number]), axis=1)
-            data = np.concatenate((data, boost_pads[start:game.goals[i].frame_number]), axis=1)
+            data = np.concatenate(
+                (
+                    np.concatenate(
+                        (
+                            np.concatenate(
+                                (
+                                    blue_team[start:end, (player_num * 7):(player_num * 7 + 7)],
+                                    np.concatenate(
+                                        (
+                                            blue_team[start:end, :(player_num * 7)], blue_team[start:end, (player_num * 7 + 7):]
+                                        ), 
+                                        axis=1
+                                    )
+                                ), 
+                                axis=1
+                            ),
+                            orange_team[start:end]
+                        ), 
+                        axis=1
+                    ), 
+                    ball[start:end]
+                ), 
+                axis=1
+            )
+            data = np.concatenate((data, boostPads[start:end]), axis=1)
             if first:
                 X_data = data[:-predict_dist]
                 y_data = data[predict_dist:, :6]
@@ -157,14 +168,19 @@ for filepath in glob.iglob('train_replays/*.replay'):
                 y_data = np.concatenate((y_data, data[predict_dist:, :6]), axis=0)
 
         for player_num in range(3):
-            data = np.concatenate((np.concatenate((np.concatenate((orange_team[start:game.goals[i].frame_number, (player_num*7):(player_num*7 + 7)], np.concatenate((orange_team[start:game.goals[i].frame_number, :(player_num*7)], orange_team[start:game.goals[i].frame_number, (player_num*7 + 7):]), axis=1)), axis=1), blue_team[start:game.goals[i].frame_number]), axis=1), ball[start:game.goals[i].frame_number]), axis=1)
+            data = np.concatenate((np.concatenate((np.concatenate((orange_team[start:end, (player_num * 7):(player_num * 7 + 7)], np.concatenate(
+                (orange_team[start:end, :(player_num * 7)], orange_team[start:end, (player_num * 7 + 7):]), axis=1)), axis=1),
+                                                   blue_team[start:end]), axis=1), ball[start:end]), axis=1)
             data[:, [0, 1, 3, 4, 7, 8, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 28, 29, 31, 32, 35, 36, 38, 39, 42, 43, 45, 46]] *= -1
             data[:, [0, 1, 3, 4, 7, 8, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 28, 29, 31, 32, 35, 36, 38, 39, 42, 43, 45, 46]] += 1
-            data = np.concatenate((data, boost_pads[start:game.goals[i].frame_number]), axis=1)
+            data = np.concatenate((data, boostPads[start:end]), axis=1)
 
             X_data = np.concatenate((X_data, data[:-predict_dist]), axis=0)
             y_data = np.concatenate((y_data, data[predict_dist:, :6]), axis=0)
 
+    if number == 0:
+        break
+    number += 1
 
 X_data = X_data.astype(np.float32)
 y_data = y_data.astype(np.float32)
