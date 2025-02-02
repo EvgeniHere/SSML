@@ -4,7 +4,6 @@ import sys
 import carball
 import numpy
 import numpy as np
-import pandas
 from carball.analysis.analysis_manager import AnalysisManager
 from carball.json_parser.game import Game
 from keras import Sequential
@@ -21,7 +20,7 @@ boost_mapping = {
     310.0: 5
 }
 
-predict_dist = 5
+predict_dist = 15
 
 
 def normalize(dataframe):
@@ -43,32 +42,14 @@ def normalize(dataframe):
     return dataframe
 
 
-def prepareData(df, boostPads):
+def prepareData(df):
     columns = df.columns[df.columns.get_level_values(1).isin([
         "pos_x", "pos_y", "pos_z",
         "vel_x", "vel_y", "vel_z",
         "boost"
     ])]
     df = df.loc[:, columns]
-
-    df_ball = df['ball']
-
-    df_players = df.drop(columns='ball', level=0)
-    stationary_mask = (df_players.shift() == df_players).groupby(level=0, axis=1).all()
-
-    rows_to_drop = stationary_mask.any(axis=1)
-
-    df_filtered_ball = df_ball[~rows_to_drop]
-    df_filtered_ball.columns = pandas.MultiIndex.from_product([['ball'], df_filtered_ball.columns])
-
-    df_filtered_players = df_players[~rows_to_drop]
-
-    df_filtered = pandas.concat(
-        [df_filtered_players, df_filtered_ball],
-        axis=1
-    )
-
-    return normalize(df_filtered), boostPads[~rows_to_drop]
+    return normalize(df)
 
 
 def getMappedBoostId(pad_id):
@@ -132,7 +113,7 @@ for filepath in glob.iglob('train_replays/*.replay'):
                     break
                 boostPads[i + rowNr, pickedBigPadId] = 0
 
-    orig_data, boostPads = prepareData(dataframe, boostPads)
+    orig_data = prepareData(dataframe)
 
     ball = getBallData(orig_data)
     blue_team, orange_team = getTeamData(orig_data)
@@ -152,18 +133,18 @@ for filepath in glob.iglob('train_replays/*.replay'):
                                     np.concatenate(
                                         (
                                             blue_team[start:end, :(player_num * 7)], blue_team[start:end, (player_num * 7 + 7):]
-                                        ), 
+                                        ),
                                         axis=1
                                     )
-                                ), 
+                                ),
                                 axis=1
                             ),
                             orange_team[start:end]
-                        ), 
+                        ),
                         axis=1
-                    ), 
+                    ),
                     ball[start:end]
-                ), 
+                ),
                 axis=1
             )
             data = np.concatenate((data, boostPads[start:end]), axis=1)
@@ -184,22 +165,21 @@ for filepath in glob.iglob('train_replays/*.replay'):
             X_data = np.concatenate((X_data, data[:-predict_dist]), axis=0)
             y_data = np.concatenate((y_data, data[predict_dist:, :6]), axis=0)
 
+    number += 1
     if number == 10:
         break
-    number += 1
 
 X_data = X_data.astype(np.float32)
 y_data = y_data.astype(np.float32)
 
-model = Sequential()
-model.add(Dense(100, input_shape=(54,), activation='relu'))
-model.add(Dense(100, activation='relu'))
-model.add(Dense(100, activation='relu'))
-model.add(Dense(50, activation='relu'))
-model.add(Dense(6, activation='sigmoid'))
+model = Sequential([
+    Dense(64, activation='relu', input_shape=(54,)),
+    Dense(64, activation='relu'),
+    Dense(6, activation='linear')
+])
 
-model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+model.compile(optimizer='adam', loss='mse', metrics=['mae'])
 
-model.fit(X_data, y_data, epochs=30, batch_size=100)
+model.fit(X_data, y_data, epochs=5, batch_size=100)
 
 model.save('model')

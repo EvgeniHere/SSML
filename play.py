@@ -6,43 +6,51 @@ import matplotlib.pyplot as plt
 import numpy as np
 from carball.analysis.analysis_manager import AnalysisManager
 from carball.json_parser.game import Game
+from matplotlib import patches
 
 predict_dist = 15
 
-boosts = np.nan_to_num([[0.0, -4240.0],
-                        [-1792.0, -4184.0],
-                        [1792.0, -4184.0],
-                        [-3072.0, -4096.0],
-                        [3072.0, -4096.0],
-                        [- 940.0, -3308.0],
-                        [940.0, -3308.0],
-                        [0.0, -2816.0],
-                        [-3584.0, -2484.0],
-                        [3584.0, -2484.0],
-                        [-1788.0, -2300.0],
-                        [1788.0, -2300.0],
-                        [-2048.0, -1036.0],
-                        [0.0, -1024.0],
-                        [2048.0, -1036.0],
-                        [-3584.0, 0.0],
-                        [-1024.0, 0.0],
-                        [1024.0, 0.0],
-                        [3584.0, 0.0],
-                        [-2048.0, 1036.0],
-                        [0.0, 1024.0],
-                        [2048.0, 1036.0],
-                        [-1788.0, 2300.0],
-                        [1788.0, 2300.0],
-                        [-3584.0, 2484.0],
-                        [3584.0, 2484.0],
-                        [0.0, 2816.0],
-                        [- 940.0, 3310.0],
-                        [940.0, 3308.0],
-                        [-3072.0, 4096.0],
-                        [3072.0, 4096.0],
-                        [-1792.0, 4184.0],
-                        [1792.0, 4184.0],
-                        [0.0, 4240.0]])
+boosts = np.array(
+    [
+        [-3072.0, -4096.0],
+        [3072.0, -4096.0],
+        [-3584.0, 0.0],
+        [3072.0, 4096.0],
+        [3584.0, 0.0],
+        [-3072.0, 4096.0],
+        [-1792.0, 4184.0],
+        [1792.0, 4184.0],
+        [-1792.0, -4184.0],
+        [1792.0, -4184.0],
+        [- 940.0, -3308.0],
+        [940.0, -3308.0],
+        [0.0, -2816.0],
+        [-3584.0, -2484.0],
+        [3584.0, -2484.0],
+        [-1788.0, -2300.0],
+        [1788.0, -2300.0],
+        [-2048.0, -1036.0],
+        [0.0, -1024.0],
+        [2048.0, -1036.0],
+        [0.0, -4240.0],
+        [0.0, 4240.0],
+        [-1024.0, 0.0],
+        [1024.0, 0.0],
+        [-2048.0, 1036.0],
+        [0.0, 1024.0],
+        [2048.0, 1036.0],
+        [-1788.0, 2300.0],
+        [1788.0, 2300.0],
+        [-3584.0, 2484.0],
+        [3584.0, 2484.0],
+        [0.0, 2816.0],
+        [- 940.0, 3310.0],
+        [940.0, 3308.0]
+    ]
+)
+
+boosts[:, 0] = (boosts[:, 0] + 4096) / 8192.0
+boosts[:, 1] = (boosts[:, 1] + 6000) / 12000.0
 
 boost_mapping = {
     40.0: 0,
@@ -96,6 +104,14 @@ x8, x9, x10, y8, y9, y10, z8, z9, z10 = 0, 0, 0, 0, 0, 0, 0, 0, 0
 old_x1, old_y1, old_z1, old_x8, old_x9, old_x10, old_y8, old_y9, old_y10 = 0, 0, 0, 0, 0, 0, 0, 0, 0
 
 pad_list = []
+
+# Precompute xlim, ylim (only set once)
+# Create one figure and axes
+fig, ax = plt.subplots(figsize=(6, 9), dpi=150)
+
+# Set consistent limits (only once)
+ax.set_xlim([0, 1])
+ax.set_ylim([0, 1])
 
 first = True
 orange = False
@@ -172,75 +188,51 @@ for filepath in glob.iglob('test_replays/*.replay'):
     data = np.concatenate((data, ball), axis=1)
     data = np.concatenate((data, boostPads), axis=1).astype(np.float32)
 
+    # Loop through the data
     for i in range(len(data) - 1):
-        x1, y1, z1 = data[i][0], data[i][1], data[i][2]
-        x2, y2, z2 = data[i][7], data[i][8], data[i][9]
-        x3, y3, z3 = data[i][14], data[i][15], data[i][16]
-        x4, y4, z4 = data[i][21], data[i][22], data[i][23]
-        x5, y5, z5 = data[i][28], data[i][29], data[i][30]
-        x6, y6, z6 = data[i][35], data[i][36], data[i][37]
-        x7, y7, z7 = data[i][42], data[i][43], data[i][44]
+        x_vals = data[i, [0, 7, 14, 21, 28, 35, 42]]
+        y_vals = data[i, [1, 8, 15, 22, 29, 36, 43]]
+        z_vals = data[i, [2, 9, 16, 23, 30, 37, 44]]
 
         if i % 13 == 0:
             pred1 = model.predict(np.array([data[i]]))
             pred2 = model.predict(np.array([np.concatenate([pred1[0], data[i + predict_dist, 6:]])]))
             pred3 = model.predict(np.array([np.concatenate([pred2[0], data[i + 2 * predict_dist, 6:]])]))
 
-            x8, y8, z8 = pred1[0][0], pred1[0][1], pred1[0][2]
-            x9, y9, z9 = pred2[0][0], pred2[0][1], pred2[0][2]
-            x10, y10, z10 = pred3[0][0], pred3[0][1], pred3[0][2]
+            pred_x = [pred1[0][0], pred2[0][0], pred3[0][0]]
+            pred_y = [pred1[0][1], pred2[0][1], pred3[0][1]]
+            pred_z = [pred1[0][2], pred2[0][2], pred3[0][2]]
 
         if i % 26 == 0:
-            old_x8 = x8
-            old_x9 = x9
-            old_x10 = x10
-            old_y8 = y8
-            old_y9 = y9
-            old_y10 = y10
-            old_z8 = z8
-            old_z9 = z9
-            old_z10 = z10
-            old_x1 = x1
-            old_y1 = y1
-            old_z1 = z1
+            old_pred_x, old_pred_y, old_pred_z = pred_x[:], pred_y[:], pred_z[:]
+            old_x1, old_y1, old_z1 = x_vals[0], y_vals[0], z_vals[0]
 
-        plt.plot(x8, y8, marker="o", markersize=z8 * 10 + 5, markeredgecolor="magenta", markerfacecolor="magenta")
-        plt.plot(x9, y9, marker="o", markersize=z9 * 10 + 5, markeredgecolor="magenta", markerfacecolor="magenta")
-        plt.plot(x10, y10, marker="o", markersize=z10 * 10 + 5, markeredgecolor="magenta", markerfacecolor="magenta")
-        plt.plot([x1, x8, x9, x10], [y1, y8, y9, y10], color='magenta')
+        # Clear previous plot instead of recreating it
+        ax.clear()
 
-        plt.plot(old_x8, old_y8, marker="o", markersize=old_z8 * 10 + 5, markeredgecolor="pink", markerfacecolor="pink")
-        plt.plot(old_x9, old_y9, marker="o", markersize=old_z9 * 10 + 5, markeredgecolor="pink", markerfacecolor="pink")
-        plt.plot(old_x10, old_y10, marker="o", markersize=old_z10 * 10 + 5, markeredgecolor="pink", markerfacecolor="pink")
-        plt.plot([old_x1, old_x8, old_x9, old_x10], [old_y1, old_y8, old_y9, old_y10], color='pink')
+        ax.add_patch(
+            patches.Rectangle((0, 0), 1, 1, linewidth=1, edgecolor='black', facecolor='none')
+        )
 
-        plt.scatter(boosts[:, 0], boosts[:, 1], color='gold', s=3)
+        # Draw predicted points
+        ax.scatter(pred_x, pred_y, s=np.array(pred_z) * 10 + 15, color='magenta', label="Predictions")
+        ax.plot([x_vals[0]] + pred_x, [y_vals[0]] + pred_y, color='magenta')
 
-        if boostPads[i, 0] == 1:
-            plt.plot(boosts[3, 0], boosts[3, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boostPads[i, 1] == 1:
-            plt.plot(boosts[4, 0], boosts[4, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boostPads[i, 2] == 1:
-            plt.plot(boosts[15, 0], boosts[15, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boostPads[i, 3] == 1:
-            plt.plot(boosts[18, 0], boosts[18, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boostPads[i, 4] == 1:
-            plt.plot(boosts[29, 0], boosts[29, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boostPads[i, 5] == 1:
-            plt.plot(boosts[30, 0], boosts[30, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
+        # Draw old predictions
+        ax.scatter(old_pred_x, old_pred_y, s=np.array(old_pred_z) * 10 + 15, color='pink')
+        ax.plot([old_x1] + old_pred_x, [old_y1] + old_pred_y, color='pink')
 
-        plt.plot(x1, y1, marker="o", markersize=z1 * 10 + 6, markeredgecolor="green", markerfacecolor="green")
-        plt.plot(x2, y2, marker="o", markersize=z2 * 10 + 6, markeredgecolor="blue", markerfacecolor="blue")
-        plt.plot(x3, y3, marker="o", markersize=z3 * 10 + 6, markeredgecolor="blue", markerfacecolor="blue")
-        plt.plot(x4, y4, marker="o", markersize=z4 * 10 + 6, markeredgecolor="orangered", markerfacecolor="orangered")
-        plt.plot(x5, y5, marker="o", markersize=z5 * 10 + 6, markeredgecolor="orangered", markerfacecolor="orangered")
-        plt.plot(x6, y6, marker="o", markersize=z6 * 10 + 6, markeredgecolor="orangered", markerfacecolor="orangered")
-        plt.plot(x7, y7, marker="o", markersize=z7 * 10 + 6, markeredgecolor="gray", markerfacecolor="gray")
+        # Draw Boost Pads
+        ax.scatter(boosts[:, 0], boosts[:, 1], color='gold', s=10)
 
-        plt.xlim([0, 1])
-        plt.ylim([0, 1])
+        # Highlight active boost pads
+        active_boost_indices = np.where(boostPads[i] == 1)
+        for idx in active_boost_indices:
+            ax.scatter(boosts[idx, 0], boosts[idx, 1], s=30, color='gold')
 
+        # Draw Players
+        colors = ["green", "blue", "blue", "orangered", "orangered", "orangered", "gray"]
+        ax.scatter(x_vals, y_vals, s=np.array(z_vals) * 10 + 40, c=colors)
+
+        # Pause and refresh the plot
         plt.pause(0.01)
-        plt.clf()
-
-    plt.show()
