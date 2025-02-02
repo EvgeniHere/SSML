@@ -1,47 +1,57 @@
-import carball
-from carball.json_parser.game import Game
-from carball.analysis.analysis_manager import AnalysisManager
 import glob
-import numpy as np
+
+import carball
 import keras
 import matplotlib.pyplot as plt
+import numpy as np
+from carball.analysis.analysis_manager import AnalysisManager
+from carball.json_parser.game import Game
 
 predict_dist = 15
 
-boosts = [[0.0, -4240.0],
-          [-1792.0, -4184.0],
-          [1792.0, -4184.0],
-          [-3072.0, -4096.0],
-          [3072.0, -4096.0],
-          [- 940.0, -3308.0],
-          [940.0, -3308.0],
-          [0.0, -2816.0],
-          [-3584.0, -2484.0],
-          [3584.0, -2484.0],
-          [-1788.0, -2300.0],
-          [1788.0, -2300.0],
-          [-2048.0, -1036.0],
-          [0.0, -1024.0],
-          [2048.0, -1036.0],
-          [-3584.0, 0.0],
-          [-1024.0, 0.0],
-          [1024.0, 0.0],
-          [3584.0, 0.0],
-          [-2048.0, 1036.0],
-          [0.0, 1024.0],
-          [2048.0, 1036.0],
-          [-1788.0, 2300.0],
-          [1788.0, 2300.0],
-          [-3584.0, 2484.0],
-          [3584.0, 2484.0],
-          [0.0, 2816.0],
-          [- 940.0, 3310.0],
-          [940.0, 3308.0],
-          [-3072.0, 4096.0],
-          [3072.0, 4096.0],
-          [-1792.0, 4184.0],
-          [1792.0, 4184.0],
-          [0.0, 4240.0]]
+boosts = np.nan_to_num([[0.0, -4240.0],
+                        [-1792.0, -4184.0],
+                        [1792.0, -4184.0],
+                        [-3072.0, -4096.0],
+                        [3072.0, -4096.0],
+                        [- 940.0, -3308.0],
+                        [940.0, -3308.0],
+                        [0.0, -2816.0],
+                        [-3584.0, -2484.0],
+                        [3584.0, -2484.0],
+                        [-1788.0, -2300.0],
+                        [1788.0, -2300.0],
+                        [-2048.0, -1036.0],
+                        [0.0, -1024.0],
+                        [2048.0, -1036.0],
+                        [-3584.0, 0.0],
+                        [-1024.0, 0.0],
+                        [1024.0, 0.0],
+                        [3584.0, 0.0],
+                        [-2048.0, 1036.0],
+                        [0.0, 1024.0],
+                        [2048.0, 1036.0],
+                        [-1788.0, 2300.0],
+                        [1788.0, 2300.0],
+                        [-3584.0, 2484.0],
+                        [3584.0, 2484.0],
+                        [0.0, 2816.0],
+                        [- 940.0, 3310.0],
+                        [940.0, 3308.0],
+                        [-3072.0, 4096.0],
+                        [3072.0, 4096.0],
+                        [-1792.0, 4184.0],
+                        [1792.0, 4184.0],
+                        [0.0, 4240.0]])
+
+boost_mapping = {
+    40.0: 0,
+    50.0: 1,
+    160.0: 2,
+    190.0: 3,
+    300.0: 4,
+    310.0: 5
+}
 
 
 def normalize(dataframe):
@@ -60,38 +70,24 @@ def normalize(dataframe):
 
     dataframe.loc[:, (slice(None), 'boost')] = dataframe.loc[:, (slice(None), 'boost')].apply(lambda x: x / 255.0)
 
-    for x in boosts:
-        x[0] = (x[0] + 4069) / 8192
-        x[1] = (x[1] + 6000) / 12000
-
     return dataframe
 
 
-def getTraindata(dataframe):
-    dataframe = dataframe.drop(['ping',
-                                'ball_cam',
-                                'ang_vel_x', 'ang_vel_y', 'ang_vel_z',
-                                'throttle',
-                                'steer',
-                                'rot_x', 'rot_y', 'rot_z',
-                                'handbrake',
-                                'jump_active',
-                                'double_jump_active',
-                                'boost_active',
-                                'dodge_active',
-                                'hit_team_no',
-                                'boost_collect',
-                                'game',
-                                'delta',
-                                'game_time',
-                                'seconds_remaining',
-                                'replicated_seconds_remaining',
-                                'ball_has_been_hit',
-                                'goal_number',
-                                'time'], level=1, axis=1)
-    dataframe = normalize(dataframe)
-    print(dataframe.head().to_string())
-    return dataframe
+def prepareData(df):
+    cols_to_keep = df.columns[df.columns.get_level_values(1).isin([
+        "pos_x", "pos_y", "pos_z",
+        "vel_x", "vel_y", "vel_z",
+        "boost"
+    ])]
+    df = df.loc[:, cols_to_keep]
+    return normalize(df)
+
+
+def getMappedBoostId(pad_id):
+    try:
+        return boost_mapping.get(pad_id, -1)
+    except KeyError:
+        raise ValueError(f"Invalid replay pad_id: {pad_id}")
 
 
 model = keras.models.load_model('model')
@@ -99,54 +95,49 @@ model = keras.models.load_model('model')
 x8, x9, x10, y8, y9, y10, z8, z9, z10 = 0, 0, 0, 0, 0, 0, 0, 0, 0
 old_x1, old_y1, old_z1, old_x8, old_x9, old_x10, old_y8, old_y9, old_y10 = 0, 0, 0, 0, 0, 0, 0, 0, 0
 
-boosts = np.nan_to_num(boosts)
-
 pad_list = []
 
 first = True
 orange = False
 for filepath in glob.iglob('test_replays/*.replay'):
+    print(f"Decompiling replay: {filepath}")
     _json = carball.decompile_replay(filepath)
+    print("Replay decompiled successfully")
+
     game = Game()
+    print("Initializing game...")
     game.initialize(loaded_json=_json)
+    print("Game initialized successfully")
 
     analysis_manager = AnalysisManager(game)
+    print("Creating analysis...")
     analysis_manager.create_analysis()
+    print("Analysis created successfully")
 
     dataframe = analysis_manager.get_data_frame()
 
-    boost_data = dataframe.loc[:, (slice(None), 'boost_collect')]
-    boost_pads = np.zeros((len(dataframe), 6))
-    for i in range(len(dataframe)):
-        game_time = dataframe.iloc[i]['game', 'time']
-        if all(np.isnan(x) for x in boost_data.iloc[i]):
-            continue
+    boost_collect = dataframe.loc[:, (slice(None), 'boost_collect')]
 
-        for y in boost_data.iloc[i]:
-            if np.isnan(y):
+    print("Converting boost pickups...")
+    boostPads = np.ones((len(dataframe), 6))
+    for rowNr in range(len(dataframe)):
+        for padId in boost_collect.iloc[rowNr]:
+            if np.isnan(padId):
                 continue
-            switch_boost_num = -1
-            if y == 40.0:
-                switch_boost_num = 0
-            elif y == 50.0:
-                switch_boost_num = 1
-            elif y == 160.0:
-                switch_boost_num = 2
-            elif y == 190.0:
-                switch_boost_num = 3
-            elif y == 300.0:
-                switch_boost_num = 4
-            elif y == 310.0:
-                switch_boost_num = 5
-            j = i
-            while j < len(dataframe) and game_time + 10.0 >= dataframe.iloc[j]['game', 'time']:
-                boost_pads[j, switch_boost_num] = 1
-                j += 1
+            pickedBigPadId = getMappedBoostId(padId)
+            for i in range(30 * 10):  # frame_tick is 0,03333 seconds -> 30 ticks/second
+                if i + rowNr >= len(dataframe):
+                    break
+                boostPads[i + rowNr, pickedBigPadId] = 0
 
-    orig_data = getTraindata(dataframe)
+    orig_data = prepareData(dataframe)
 
+    ball = np.nan_to_num(orig_data['ball'], nan=0.0)
     blue_team = orig_data.copy()
     orange_team = orig_data.copy()
+
+    blue_team = blue_team.drop('ball', level=0, axis=1)
+    orange_team = orange_team.drop('ball', level=0, axis=1)
 
     for player in game.players:
         if player.is_orange:
@@ -154,9 +145,8 @@ for filepath in glob.iglob('test_replays/*.replay'):
         else:
             orange_team = orange_team.drop([player.name], level=0, axis=1)
 
-    blue_team = np.nan_to_num(blue_team.drop('ball', level=0, axis=1), nan=0.0)
-    orange_team = np.nan_to_num(orange_team.drop('ball', level=0, axis=1), nan=0.0)
-    ball = np.nan_to_num(orig_data['ball'], nan=0.0)
+    blue_team = np.nan_to_num(blue_team, nan=0.0)
+    orange_team = np.nan_to_num(orange_team, nan=0.0)
 
     player_index = 0
     orange = game.players[0].is_orange
@@ -174,17 +164,13 @@ for filepath in glob.iglob('test_replays/*.replay'):
                                                np.concatenate((orange_team[:, :(player_index * 7)],
                                                                orange_team[:, (player_index * 7 + 7):]), axis=1)),
                                               axis=1), blue_team), axis=1)
-        data[:, [0, 1, 3, 4, 7, 8, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 28, 29, 31, 32, 35, 36, 38, 39]] *= -1
-        data[:, [0, 1, 3, 4, 7, 8, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 28, 29, 31, 32, 35, 36, 38, 39]] += 1
-        ball[:, [0, 1, 3, 4]] *= -1
-        ball[:, [0, 1, 3, 4]] += 1
     else:
         data = np.concatenate((np.concatenate((blue_team[:, (player_index * 7):(player_index * 7 + 7)], np.concatenate(
             (blue_team[:, :(player_index * 7)], blue_team[:, (player_index * 7 + 7):]), axis=1)), axis=1), orange_team),
                               axis=1)
 
     data = np.concatenate((data, ball), axis=1)
-    data = np.concatenate((data, boost_pads), axis=1).astype(np.float32)
+    data = np.concatenate((data, boostPads), axis=1).astype(np.float32)
 
     for i in range(len(data) - 1):
         x1, y1, z1 = data[i][0], data[i][1], data[i][2]
@@ -230,17 +216,17 @@ for filepath in glob.iglob('test_replays/*.replay'):
 
         plt.scatter(boosts[:, 0], boosts[:, 1], color='gold', s=3)
 
-        if boost_pads[i, 0] == 0:
+        if boostPads[i, 0] == 1:
             plt.plot(boosts[3, 0], boosts[3, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boost_pads[i, 1] == 0:
+        if boostPads[i, 1] == 1:
             plt.plot(boosts[4, 0], boosts[4, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boost_pads[i, 2] == 0:
+        if boostPads[i, 2] == 1:
             plt.plot(boosts[15, 0], boosts[15, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boost_pads[i, 3] == 0:
+        if boostPads[i, 3] == 1:
             plt.plot(boosts[18, 0], boosts[18, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boost_pads[i, 4] == 0:
+        if boostPads[i, 4] == 1:
             plt.plot(boosts[29, 0], boosts[29, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
-        if boost_pads[i, 5] == 0:
+        if boostPads[i, 5] == 1:
             plt.plot(boosts[30, 0], boosts[30, 1], marker="o", markersize=10, markeredgecolor="gold", markerfacecolor="gold")
 
         plt.plot(x1, y1, marker="o", markersize=z1 * 10 + 6, markeredgecolor="green", markerfacecolor="green")

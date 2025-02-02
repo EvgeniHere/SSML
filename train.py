@@ -44,11 +44,12 @@ def normalize(dataframe):
 
 
 def prepareData(df, boostPads):
-    df = df.loc[:, (slice(None), [
+    columns = df.columns[df.columns.get_level_values(1).isin([
         "pos_x", "pos_y", "pos_z",
         "vel_x", "vel_y", "vel_z",
         "boost"
     ])]
+    df = df.loc[:, columns]
 
     df_ball = df['ball']
 
@@ -60,8 +61,10 @@ def prepareData(df, boostPads):
     df_filtered_ball = df_ball[~rows_to_drop]
     df_filtered_ball.columns = pandas.MultiIndex.from_product([['ball'], df_filtered_ball.columns])
 
+    df_filtered_players = df_players[~rows_to_drop]
+
     df_filtered = pandas.concat(
-        [df_players[~rows_to_drop], df_filtered_ball],
+        [df_filtered_players, df_filtered_ball],
         axis=1
     )
 
@@ -79,6 +82,24 @@ X_data = []
 y_data = []
 first = True
 number = 0
+
+
+def getBallData(df):
+    return np.nan_to_num(df['ball'], nan=0.0)
+
+
+def getTeamData(df):
+    blue_team = df.copy()
+    orange_team = df.copy()
+
+    blue_team = blue_team.drop('ball', level=0, axis=1)
+    orange_team = orange_team.drop('ball', level=0, axis=1)
+
+    blue_team = np.nan_to_num(blue_team.drop([player.name for player in game.players if not player.is_orange], level=0, axis=1), nan=0.0)
+    orange_team = np.nan_to_num(orange_team.drop([player.name for player in game.players if player.is_orange], level=0, axis=1), nan=0.0)
+
+    return blue_team, orange_team
+
 
 for filepath in glob.iglob('train_replays/*.replay'):
     print(f"Decompiling replay {number + 1}: {filepath}")
@@ -113,21 +134,8 @@ for filepath in glob.iglob('train_replays/*.replay'):
 
     orig_data, boostPads = prepareData(dataframe, boostPads)
 
-    ball = np.nan_to_num(orig_data['ball'], nan=0.0)
-    blue_team = orig_data.copy()
-    orange_team = orig_data.copy()
-
-    blue_team = blue_team.drop('ball', level=0, axis=1)
-    orange_team = orange_team.drop('ball', level=0, axis=1)
-
-    for player in game.players:
-        if player.is_orange:
-            blue_team = blue_team.drop([player.name], level=0, axis=1)
-        else:
-            orange_team = orange_team.drop([player.name], level=0, axis=1)
-
-    blue_team = np.nan_to_num(blue_team, nan=0.0)
-    orange_team = np.nan_to_num(orange_team, nan=0.0)
+    ball = getBallData(orig_data)
+    blue_team, orange_team = getTeamData(orig_data)
 
     for goalNr in range(len(game.goals)):
         start = 0 if goalNr == 0 else game.goals[goalNr - 1].frame_number
@@ -171,14 +179,12 @@ for filepath in glob.iglob('train_replays/*.replay'):
             data = np.concatenate((np.concatenate((np.concatenate((orange_team[start:end, (player_num * 7):(player_num * 7 + 7)], np.concatenate(
                 (orange_team[start:end, :(player_num * 7)], orange_team[start:end, (player_num * 7 + 7):]), axis=1)), axis=1),
                                                    blue_team[start:end]), axis=1), ball[start:end]), axis=1)
-            data[:, [0, 1, 3, 4, 7, 8, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 28, 29, 31, 32, 35, 36, 38, 39, 42, 43, 45, 46]] *= -1
-            data[:, [0, 1, 3, 4, 7, 8, 10, 11, 14, 15, 17, 18, 21, 22, 24, 25, 28, 29, 31, 32, 35, 36, 38, 39, 42, 43, 45, 46]] += 1
             data = np.concatenate((data, boostPads[start:end]), axis=1)
 
             X_data = np.concatenate((X_data, data[:-predict_dist]), axis=0)
             y_data = np.concatenate((y_data, data[predict_dist:, :6]), axis=0)
 
-    if number == 0:
+    if number == 10:
         break
     number += 1
 
