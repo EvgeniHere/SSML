@@ -1,121 +1,65 @@
 import glob
+from collections import defaultdict
+from typing import Tuple, List
 
 import carball
 import keras
-import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from carball.analysis.analysis_manager import AnalysisManager
 from carball.json_parser.game import Game
-from matplotlib import patches
 
-predict_dist = 15
-
-boosts = np.array(
-    [
-        [-3072.0, -4096.0],
-        [3072.0, -4096.0],
-        [-3584.0, 0.0],
-        [3072.0, 4096.0],
-        [3584.0, 0.0],
-        [-3072.0, 4096.0],
-        [-1792.0, 4184.0],
-        [1792.0, 4184.0],
-        [-1792.0, -4184.0],
-        [1792.0, -4184.0],
-        [- 940.0, -3308.0],
-        [940.0, -3308.0],
-        [0.0, -2816.0],
-        [-3584.0, -2484.0],
-        [3584.0, -2484.0],
-        [-1788.0, -2300.0],
-        [1788.0, -2300.0],
-        [-2048.0, -1036.0],
-        [0.0, -1024.0],
-        [2048.0, -1036.0],
-        [0.0, -4240.0],
-        [0.0, 4240.0],
-        [-1024.0, 0.0],
-        [1024.0, 0.0],
-        [-2048.0, 1036.0],
-        [0.0, 1024.0],
-        [2048.0, 1036.0],
-        [-1788.0, 2300.0],
-        [1788.0, 2300.0],
-        [-3584.0, 2484.0],
-        [3584.0, 2484.0],
-        [0.0, 2816.0],
-        [- 940.0, 3310.0],
-        [940.0, 3308.0]
-    ]
-)
-
-boosts[:, 0] = (boosts[:, 0] + 4096) / 8192.0
-boosts[:, 1] = (boosts[:, 1] + 6000) / 12000.0
-
-boost_mapping = {
-    40.0: 0,
-    50.0: 1,
-    160.0: 2,
-    190.0: 3,
-    300.0: 4,
-    310.0: 5
-}
-
-
-def normalize(dataframe):
-    dataframe.loc[:, (slice(None), 'pos_x')] = dataframe.loc[:, (slice(None), 'pos_x')].apply(lambda x: x + 4096)
-    dataframe.loc[:, (slice(None), 'pos_x')] = dataframe.loc[:, (slice(None), 'pos_x')].apply(lambda x: x / 8192.0)
-    dataframe.loc[:, (slice(None), 'pos_y')] = dataframe.loc[:, (slice(None), 'pos_y')].apply(lambda x: x + 6000)
-    dataframe.loc[:, (slice(None), 'pos_y')] = dataframe.loc[:, (slice(None), 'pos_y')].apply(lambda x: x / 12000.0)
-    dataframe.loc[:, (slice(None), 'pos_z')] = dataframe.loc[:, (slice(None), 'pos_z')].apply(lambda x: x / 2044.0)
-
-    dataframe.loc[:, (slice(None), 'vel_x')] = dataframe.loc[:, (slice(None), 'vel_x')].apply(lambda x: x + 35000)
-    dataframe.loc[:, (slice(None), 'vel_x')] = dataframe.loc[:, (slice(None), 'vel_x')].apply(lambda x: x / 70000.0)
-    dataframe.loc[:, (slice(None), 'vel_y')] = dataframe.loc[:, (slice(None), 'vel_y')].apply(lambda x: x + 35000)
-    dataframe.loc[:, (slice(None), 'vel_y')] = dataframe.loc[:, (slice(None), 'vel_y')].apply(lambda x: x / 70000.0)
-    dataframe.loc[:, (slice(None), 'vel_z')] = dataframe.loc[:, (slice(None), 'vel_z')].apply(lambda x: x + 35000)
-    dataframe.loc[:, (slice(None), 'vel_z')] = dataframe.loc[:, (slice(None), 'vel_z')].apply(lambda x: x / 70000.0)
-
-    dataframe.loc[:, (slice(None), 'boost')] = dataframe.loc[:, (slice(None), 'boost')].apply(lambda x: x / 255.0)
-
-    return dataframe
-
-
-def prepareData(df):
-    cols_to_keep = df.columns[df.columns.get_level_values(1).isin([
-        "pos_x", "pos_y", "pos_z",
-        "vel_x", "vel_y", "vel_z",
-        "boost"
-    ])]
-    df = df.loc[:, cols_to_keep]
-    return normalize(df)
-
-
-def getMappedBoostId(pad_id):
-    try:
-        return boost_mapping.get(pad_id, -1)
-    except KeyError:
-        raise ValueError(f"Invalid replay pad_id: {pad_id}")
-
+from visualization import setup_plot, plot_frame
 
 model = keras.models.load_model('model')
 
-x8, x9, x10, y8, y9, y10, z8, z9, z10 = 0, 0, 0, 0, 0, 0, 0, 0, 0
-old_x1, old_y1, old_z1, old_x8, old_x9, old_x10, old_y8, old_y9, old_y10 = 0, 0, 0, 0, 0, 0, 0, 0, 0
 
-pad_list = []
+def normalize_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    norm_specs = {
+        'pos_x': (4096, 8192), 'pos_y': (6000, 12000), 'pos_z': (0, 2044),
+        'vel_x': (35000, 70000), 'vel_y': (35000, 70000), 'vel_z': (35000, 70000),
+        'rot_x': (-np.pi / 2, np.pi / 2), 'rot_y': (-np.pi, np.pi), 'rot_z': (-np.pi, np.pi),
+        'boost': (0, 255)
+    }
+    for col, (offset, scale) in norm_specs.items():
+        df.loc[:, (slice(None), col)] = df.loc[:, (slice(None), col)].apply(
+            lambda x: (x + offset) / scale if offset != 0 else x / scale
+        )
+    return df
 
-# Precompute xlim, ylim (only set once)
-# Create one figure and axes
-fig, ax = plt.subplots(figsize=(6, 9), dpi=150)
 
-# Set consistent limits (only once)
-ax.set_xlim([0, 1])
-ax.set_ylim([0, 1])
+def prepare_data(df: pd.DataFrame) -> pd.DataFrame:
+    relevant_columns = ["pos_x", "pos_y", "pos_z", "vel_x", "vel_y", "vel_z", "rot_x", "rot_y", "rot_z", "boost"]
+    cols_to_keep = df.columns[df.columns.get_level_values(1).isin(relevant_columns)]
+    df = df.loc[:, cols_to_keep].drop(columns=[("ball", "rot_x"), ("ball", "rot_y"), ("ball", "rot_z")])
+    return normalize_dataframe(df)
 
-first = True
-orange = False
-for filepath in glob.iglob('test_replays/*.replay'):
+
+boost_mapping = {
+    40.0: 0, 50.0: 1, 160.0: 2,
+    190.0: 3, 300.0: 4, 310.0: 5
+}
+
+
+def compute_boost_pad_states(boost_collect, num_frames, cooldown_ticks=300):
+    # cooldown_ticks: 10 seconds at 30Hz
+    boost_pad_states = np.ones((num_frames, len(boost_mapping)))
+    frame_to_pad_ids = defaultdict(list)
+    for idx, row in boost_collect.iterrows():
+        for pad_id in row:
+            if not np.isnan(pad_id):
+                boost_idx = boost_mapping.get(pad_id, -1)
+                if boost_idx >= 0:
+                    frame_to_pad_ids[idx].append(boost_idx)
+
+    for frame_idx, pad_ids in frame_to_pad_ids.items():
+        for pad_id in pad_ids:
+            end_idx = min(frame_idx + cooldown_ticks, num_frames)
+            boost_pad_states[frame_idx:end_idx, pad_id] = 0
+    return boost_pad_states
+
+
+def process_replay(filepath: str) -> Tuple[np.ndarray, np.ndarray]:
     print(f"Decompiling replay: {filepath}")
     _json = carball.decompile_replay(filepath)
     print("Replay decompiled successfully")
@@ -132,107 +76,69 @@ for filepath in glob.iglob('test_replays/*.replay'):
 
     dataframe = analysis_manager.get_data_frame()
 
+    print("Converting boost pickups...")
+
     boost_collect = dataframe.loc[:, (slice(None), 'boost_collect')]
 
-    print("Converting boost pickups...")
-    boostPads = np.ones((len(dataframe), 6))
-    for rowNr in range(len(dataframe)):
-        for padId in boost_collect.iloc[rowNr]:
-            if np.isnan(padId):
-                continue
-            pickedBigPadId = getMappedBoostId(padId)
-            for i in range(30 * 10):  # frame_tick is 0,03333 seconds -> 30 ticks/second
-                if i + rowNr >= len(dataframe):
-                    break
-                boostPads[i + rowNr, pickedBigPadId] = 0
+    boost_pad_states = compute_boost_pad_states(boost_collect, dataframe.shape[0])
 
-    orig_data = prepareData(dataframe)
+    normalized_data = prepare_data(dataframe)
 
-    ball = np.nan_to_num(orig_data['ball'], nan=0.0)
-    blue_team = orig_data.copy()
-    orange_team = orig_data.copy()
+    ball = np.nan_to_num(normalized_data['ball'], nan=0.0)
 
-    blue_team = blue_team.drop('ball', level=0, axis=1)
-    orange_team = orange_team.drop('ball', level=0, axis=1)
+    non_ball_data = normalized_data.drop('ball', level=0, axis=1)
+    blue_data = non_ball_data.copy()
+    orange_data = non_ball_data.copy()
 
     for player in game.players:
         if player.is_orange:
-            blue_team = blue_team.drop([player.name], level=0, axis=1)
+            blue_data = blue_data.drop([player.name], level=0, axis=1)
         else:
-            orange_team = orange_team.drop([player.name], level=0, axis=1)
+            orange_data = orange_data.drop([player.name], level=0, axis=1)
 
-    blue_team = np.nan_to_num(blue_team, nan=0.0)
-    orange_team = np.nan_to_num(orange_team, nan=0.0)
+    blue_data = np.nan_to_num(blue_data, nan=0.0)
+    orange_data = np.nan_to_num(orange_data, nan=0.0)
 
-    player_index = 0
-    orange = game.players[0].is_orange
+    player_index = next(idx for idx, p in enumerate(game.players) if not p.is_orange)
 
-    for i in range(len(game.players)):
-        if 'miyjo' in game.players[i].name.lower():
-            player_index = i
-            orange = game.players[i].is_orange
-            break
+    print(f"Player selected: {player_index + 1}. {game.players[player_index].name}")
 
-    print("Name: ", game.players[player_index].name)
+    input_data = np.concatenate((
+        blue_data[:, (player_index * 10):(player_index * 10 + 10)],
+        blue_data[:, :(player_index * 10)],
+        blue_data[:, (player_index * 10 + 10):],
+        orange_data,
+        ball,
+        boost_pad_states
+    ), axis=1).astype(np.float32)
 
-    if orange:
-        data = np.concatenate((np.concatenate((orange_team[:, (player_index * 7):(player_index * 7 + 7)],
-                                               np.concatenate((orange_team[:, :(player_index * 7)],
-                                                               orange_team[:, (player_index * 7 + 7):]), axis=1)),
-                                              axis=1), blue_team), axis=1)
-    else:
-        data = np.concatenate((np.concatenate((blue_team[:, (player_index * 7):(player_index * 7 + 7)], np.concatenate(
-            (blue_team[:, :(player_index * 7)], blue_team[:, (player_index * 7 + 7):]), axis=1)), axis=1), orange_team),
-                              axis=1)
+    return input_data, boost_pad_states
 
-    data = np.concatenate((data, ball), axis=1)
-    data = np.concatenate((data, boostPads), axis=1).astype(np.float32)
 
-    # Loop through the data
-    for i in range(len(data) - 1):
-        x_vals = data[i, [0, 7, 14, 21, 28, 35, 42]]
-        y_vals = data[i, [1, 8, 15, 22, 29, 36, 43]]
-        z_vals = data[i, [2, 9, 16, 23, 30, 37, 44]]
+def normalize_boostpad_positions(boost_pad_positions: List[List[float]]) -> np.ndarray:
+    boost_pad_positions = np.array(boost_pad_positions)
+    boost_pad_positions[:, 0] = (boost_pad_positions[:, 0] + 4096) / 8192.0
+    boost_pad_positions[:, 1] = (boost_pad_positions[:, 1] + 6000) / 12000.0
+    return boost_pad_positions
 
-        if i % 13 == 0:
-            pred1 = model.predict(np.array([data[i]]))
-            pred2 = model.predict(np.array([np.concatenate([pred1[0], data[i + predict_dist, 6:]])]))
-            pred3 = model.predict(np.array([np.concatenate([pred2[0], data[i + 2 * predict_dist, 6:]])]))
 
-            pred_x = [pred1[0][0], pred2[0][0], pred3[0][0]]
-            pred_y = [pred1[0][1], pred2[0][1], pred3[0][1]]
-            pred_z = [pred1[0][2], pred2[0][2], pred3[0][2]]
+boost_pad_positions = normalize_boostpad_positions([
+    [3072.0, -4096.0], [-3072.0, -4096.0], [-3584.0, 0.0], [3584.0, 0.0],
+    [3072.0, 4096.0], [-3072.0, 4096.0], [-1792.0, 4184.0], [1792.0, 4184.0],
+    [-1792.0, -4184.0], [1792.0, -4184.0], [-940.0, -3308.0], [940.0, -3308.0],
+    [0.0, -2816.0], [-3584.0, -2484.0], [3584.0, -2484.0], [-1788.0, -2300.0],
+    [1788.0, -2300.0], [-2048.0, -1036.0], [0.0, -1024.0], [2048.0, -1036.0],
+    [0.0, -4240.0], [0.0, 4240.0], [-1024.0, 0.0], [1024.0, 0.0],
+    [-2048.0, 1036.0], [0.0, 1024.0], [2048.0, 1036.0], [-1788.0, 2300.0],
+    [1788.0, 2300.0], [-3584.0, 2484.0], [3584.0, 2484.0], [0.0, 2816.0],
+    [-940.0, 3310.0], [940.0, 3308.0]
+])
 
-        if i % 26 == 0:
-            old_pred_x, old_pred_y, old_pred_z = pred_x[:], pred_y[:], pred_z[:]
-            old_x1, old_y1, old_z1 = x_vals[0], y_vals[0], z_vals[0]
+for filepath in glob.iglob('test_replays/*.replay'):
+    input_data, boost_pad_states = process_replay(filepath)
 
-        # Clear previous plot instead of recreating it
-        ax.clear()
+    num_entities = input_data.shape[1] // 10
 
-        ax.add_patch(
-            patches.Rectangle((0, 0), 1, 1, linewidth=1, edgecolor='black', facecolor='none')
-        )
-
-        # Draw predicted points
-        ax.scatter(pred_x, pred_y, s=np.array(pred_z) * 10 + 15, color='magenta', label="Predictions")
-        ax.plot([x_vals[0]] + pred_x, [y_vals[0]] + pred_y, color='magenta')
-
-        # Draw old predictions
-        ax.scatter(old_pred_x, old_pred_y, s=np.array(old_pred_z) * 10 + 15, color='pink')
-        ax.plot([old_x1] + old_pred_x, [old_y1] + old_pred_y, color='pink')
-
-        # Draw Boost Pads
-        ax.scatter(boosts[:, 0], boosts[:, 1], color='gold', s=10)
-
-        # Highlight active boost pads
-        active_boost_indices = np.where(boostPads[i] == 1)
-        for idx in active_boost_indices:
-            ax.scatter(boosts[idx, 0], boosts[idx, 1], s=30, color='gold')
-
-        # Draw Players
-        colors = ["green", "blue", "blue", "orangered", "orangered", "orangered", "gray"]
-        ax.scatter(x_vals, y_vals, s=np.array(z_vals) * 10 + 40, c=colors)
-
-        # Pause and refresh the plot
-        plt.pause(0.01)
+    fig, ax = setup_plot()
+    for i in range(len(input_data)):
+        plot_frame(ax, input_data, i, model, boost_pad_states, boost_pad_positions)
